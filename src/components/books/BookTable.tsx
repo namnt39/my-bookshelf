@@ -198,8 +198,8 @@ export function BookTable({ books, className, onSelectionChange, selectedIds }: 
                 <TableCell style={{ width: columnWidths.title }}>
                   <div className="flex flex-col">
                     <span className="font-medium text-foreground">{book.title}</span>
-                    {book.level?.name ? (
-                      <span className="text-xs text-muted-foreground">Level {book.level.name}</span>
+                    {book.tier?.tier_name ? (
+                      <span className="text-xs text-muted-foreground">Level {book.tier.tier_name}</span>
                     ) : null}
                   </div>
                 </TableCell>
@@ -209,7 +209,9 @@ export function BookTable({ books, className, onSelectionChange, selectedIds }: 
                 <TableCell style={{ width: columnWidths.shelf }}>
                   <div className="flex flex-col">
                     <span>{book.shelf?.name ?? "Unfiled"}</span>
-                    {book.level?.name ? <span className="text-xs text-muted-foreground">{book.level.name}</span> : null}
+                    {book.tier?.tier_name ? (
+                      <span className="text-xs text-muted-foreground">{book.tier.tier_name}</span>
+                    ) : null}
                   </div>
                 </TableCell>
                 <TableCell style={{ width: columnWidths.isbn }}>
@@ -219,7 +221,7 @@ export function BookTable({ books, className, onSelectionChange, selectedIds }: 
                   <span
                     className={cn(
                       "rounded-full px-3 py-1 text-xs font-semibold",
-                      book.status === "loaned"
+                      book.status === "borrowed"
                         ? "bg-amber-100 text-amber-800"
                         : book.status === "archived"
                           ? "bg-slate-200 text-slate-700"

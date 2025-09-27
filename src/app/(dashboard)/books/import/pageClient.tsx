@@ -50,6 +50,7 @@ const CSV_FIELD_OPTIONS = [
   { value: "cover_url", label: "Cover / Image" },
   { value: "shelf", label: "Shelf" },
   { value: "level", label: "Level" },
+  { value: "tier", label: "Tier" },
   { value: "note", label: "Note" },
 ] as const
 
@@ -133,6 +134,10 @@ export function ImportBooksClientPage({ shelves, importAction }: ImportBooksClie
         }
         if ((!row.level || !row.level.trim()) && setDefaultLocation && defaultLevelName) {
           next.level = defaultLevelName
+          next.tier = defaultLevelName
+        }
+        if ((!row.tier || !row.tier.trim()) && next.level) {
+          next.tier = next.level
         }
         return next
       })

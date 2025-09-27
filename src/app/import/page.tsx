@@ -4,7 +4,7 @@ import { bulkInsertBooks, type BulkInsertOptions } from "@/lib/books"
 import { type PreparedBookRow } from "@/lib/csv"
 import { listShelvesWithLevels } from "@/lib/shelves"
 
-import { ImportBooksClientPage, type ImportBooksActionPayload } from "../books/import/pageClient"
+import { ImportBooksClientPage, type ImportBooksActionPayload } from "../(dashboard)/books/import/pageClient"
 
 export default async function ImportPage() {
   const shelves = await listShelvesWithLevels()
