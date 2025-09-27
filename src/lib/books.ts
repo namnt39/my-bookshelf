@@ -1,3 +1,9 @@
+import {
+  PostgrestMaybeSingleResponse,
+  PostgrestSingleResponse,
+  type SupabaseClient,
+} from "@supabase/supabase-js"
+
 import { chunk } from "./collections"
 import { PreparedBookRow } from "./csv"
 import { getCoversBucket, isSupabaseConfigured } from "./supabase/env"
@@ -131,8 +137,9 @@ export async function listBooks(params: ListBooksParams = {}): Promise<ListBooks
         .createSignedUrls(coverPaths, 60 * 60)
       if (!signedError && signedUrls) {
         signedUrls.forEach((item) => {
-          if (item.signedUrl) {
-            signedUrlMap.set(item.path, item.signedUrl)
+          const { path, signedUrl } = item
+          if (typeof path === "string" && path.length > 0 && signedUrl) {
+            signedUrlMap.set(path, signedUrl)
           }
         })
       }
@@ -238,7 +245,7 @@ interface ShelfCacheValue {
 }
 
 async function ensureShelfAndTier(
-  supabase: ReturnType<typeof createServerClient>,
+  supabase: SupabaseClient<Database, "public">,
   shelfName?: string | null,
   tierName?: string | null,
   cache = new Map<string, ShelfCacheValue>(),
@@ -249,21 +256,27 @@ async function ensureShelfAndTier(
     return cache.get(key) ?? null
   }
 
-  const { data: existingShelf, error: shelfError } = await supabase
+  const shelfResponse = await supabase
     .from("shelves")
     .select("id")
     .eq("name", shelfName)
     .maybeSingle()
+  const { data: existingShelf, error: shelfError } = shelfResponse as PostgrestMaybeSingleResponse<
+    Pick<ShelfRow, "id">
+  >
   if (shelfError && shelfError.code !== "PGRST116") {
     throw new Error(shelfError.message)
   }
   let shelfId = existingShelf?.id
   if (!shelfId) {
-    const { data: insertedShelf, error: insertShelfError } = await supabase
-      .from("shelves")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const insertShelfResponse = await (supabase.from("shelves") as any)
       .insert({ name: shelfName })
       .select("id")
       .single()
+    const { data: insertedShelf, error: insertShelfError } = insertShelfResponse as PostgrestSingleResponse<
+      Pick<ShelfRow, "id">
+    >
     if (insertShelfError) {
       throw new Error(insertShelfError.message)
     }
@@ -276,23 +289,29 @@ async function ensureShelfAndTier(
     return result
   }
 
-  const { data: existingTier, error: tierError } = await supabase
+  const tierResponse = await supabase
     .from("shelf_tiers")
     .select("id")
     .eq("shelf_id", shelfId)
     .eq("tier_name", tierName)
     .maybeSingle()
+  const { data: existingTier, error: tierError } = tierResponse as PostgrestMaybeSingleResponse<
+    Pick<TierRow, "id">
+  >
   if (tierError && tierError.code !== "PGRST116") {
     throw new Error(tierError.message)
   }
 
   let tierId = existingTier?.id
   if (!tierId) {
-    const { data: insertedTier, error: insertTierError } = await supabase
-      .from("shelf_tiers")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const insertTierResponse = await (supabase.from("shelf_tiers") as any)
       .insert({ shelf_id: shelfId, tier_name: tierName })
       .select("id")
       .single()
+    const { data: insertedTier, error: insertTierError } = insertTierResponse as PostgrestSingleResponse<
+      Pick<TierRow, "id">
+    >
     if (insertTierError) {
       throw new Error(insertTierError.message)
     }
@@ -358,7 +377,8 @@ export async function bulkInsertBooks(
       continue
     }
 
-    const mutation = supabase.from("books").upsert(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mutation = (supabase.from("books") as any).upsert(
       payload.map((item) => item.data),
       {
         onConflict: "isbn",
