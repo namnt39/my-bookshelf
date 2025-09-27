@@ -1,3 +1,5 @@
+import { PostgrestMaybeSingleResponse, PostgrestSingleResponse } from "@supabase/supabase-js"
+
 import { isSupabaseConfigured } from "./supabase/env"
 import { createServerClient } from "./supabase/server"
 
@@ -85,11 +87,14 @@ export async function ensureShelfTier(
   const supabase = createServerClient()
   const { shelfName, tierName } = input
 
-  const { data: existingShelf, error: shelfError } = await supabase
+  const shelfResponse = await supabase
     .from("shelves")
     .select("id")
     .eq("name", shelfName)
     .maybeSingle()
+  const { data: existingShelf, error: shelfError } = shelfResponse as PostgrestMaybeSingleResponse<
+    Pick<Database["public"]["Tables"]["shelves"]["Row"], "id">
+  >
   if (shelfError && shelfError.code !== "PGRST116") {
     throw new Error(shelfError.message)
   }
@@ -97,11 +102,14 @@ export async function ensureShelfTier(
   let shelfId = existingShelf?.id
 
   if (!shelfId) {
-    const { data: createdShelf, error: createShelfError } = await supabase
-      .from("shelves")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const insertShelfResponse = await (supabase.from("shelves") as any)
       .insert({ name: shelfName })
       .select("id")
       .single()
+    const { data: createdShelf, error: createShelfError } = insertShelfResponse as PostgrestSingleResponse<
+      Pick<Database["public"]["Tables"]["shelves"]["Row"], "id">
+    >
     if (createShelfError) {
       throw new Error(createShelfError.message)
     }
@@ -112,12 +120,15 @@ export async function ensureShelfTier(
     return { shelf_id: shelfId, shelf_tier_id: null }
   }
 
-  const { data: existingTier, error: tierError } = await supabase
+  const tierResponse = await supabase
     .from("shelf_tiers")
     .select("id")
     .eq("shelf_id", shelfId)
     .eq("tier_name", tierName)
     .maybeSingle()
+  const { data: existingTier, error: tierError } = tierResponse as PostgrestMaybeSingleResponse<
+    Pick<ShelfTierRow, "id">
+  >
   if (tierError && tierError.code !== "PGRST116") {
     throw new Error(tierError.message)
   }
@@ -126,11 +137,14 @@ export async function ensureShelfTier(
     return { shelf_id: shelfId, shelf_tier_id: existingTier.id }
   }
 
-  const { data: createdTier, error: createTierError } = await supabase
-    .from("shelf_tiers")
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const insertTierResponse = await (supabase.from("shelf_tiers") as any)
     .insert({ shelf_id: shelfId, tier_name: tierName })
     .select("id")
     .single()
+  const { data: createdTier, error: createTierError } = insertTierResponse as PostgrestSingleResponse<
+    Pick<ShelfTierRow, "id">
+  >
 
   if (createTierError) {
     throw new Error(createTierError.message)
