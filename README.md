@@ -1,36 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## My Book Shelf
 
-## Getting Started
+My Book Shelf is a Next.js App Router project that combines Tailwind CSS, shadcn/ui, and Supabase for data, auth, and storage. The dashboard lets you browse books in a card or table view with filters, search, and pagination.
 
-First, run the development server:
+## Requirements
+
+- Node.js 18+
+- npm (ships with Node.js) or your package manager of choice
+- A Supabase project with the following resources enabled:
+  - Tables: `shelves`, `shelf_tiers`, `borrowers`, `books`, `loans`
+  - Storage bucket for cover images (default name: `covers`)
+  - Row Level Security turned on for all tables
+
+## Environment variables
+
+Create a `.env.local` file and add:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+NEXT_PUBLIC_SUPABASE_URL=your-supabase-url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+# Optional but recommended for server-side rendering, storage signing, and server actions
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+
+# Optional: override the storage bucket used for book covers
+NEXT_PUBLIC_SUPABASE_COVERS_BUCKET=covers
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+> ⚠️ Never expose the `SUPABASE_SERVICE_ROLE_KEY` in the browser. It is only read on the server.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Local development
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Install dependencies and start the dev server:
 
-## Learn More
+```bash
+npm install
+npm run dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+Visit [http://localhost:3000](http://localhost:3000) to open the dashboard. The `/books` route fetches data from Supabase using the filters supplied in the query string.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Running lint checks
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npm run lint
+```
 
-## Deploy on Vercel
+## Deploying to Vercel
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. Push your changes to GitHub.
+2. Create a new Vercel project and import the repository.
+3. Configure the same environment variables in the Vercel dashboard (Project Settings → Environment Variables).
+4. Trigger a deployment. Vercel will build the Next.js app and expose the dashboard once the build succeeds.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+For more information see the [Vercel documentation](https://vercel.com/docs) and the [Next.js deployment guide](https://nextjs.org/docs/app/building-your-application/deploying).
