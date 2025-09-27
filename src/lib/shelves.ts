@@ -1,67 +1,89 @@
-import { createServerSupabaseClient, isSupabaseConfigured } from "./supabaseClient"
+import { isSupabaseConfigured } from "./supabase/env"
+import { createServerClient } from "./supabase/server"
+
+import type { Database, ShelfTier as ShelfTierRow } from "@/types/db"
 
 export interface Shelf {
   id: string
   name: string
 }
 
-export interface ShelfLevel {
+export interface ShelfTier {
   id: string
   shelf_id: string
-  name: string
+  tier_name: string
+  position: number
 }
 
-export interface ShelfWithLevels extends Shelf {
-  levels: ShelfLevel[]
+export interface ShelfWithTiers extends Shelf {
+  tiers: ShelfTier[]
+  /**
+   * @deprecated Use `tiers` instead. Kept for backwards compatibility with legacy components.
+   */
+  levels?: (ShelfTier & { name: string })[]
 }
 
-export async function listShelvesWithLevels(): Promise<ShelfWithLevels[]> {
+type SupabaseShelfRow = Database["public"]["Tables"]["shelves"]["Row"] & {
+  shelf_tiers: ShelfTierRow[] | null
+}
+
+export async function listShelvesWithTiers(): Promise<ShelfWithTiers[]> {
   if (!isSupabaseConfigured()) {
     return []
   }
-  const supabase = createServerSupabaseClient()
+  const supabase = createServerClient()
   try {
     const { data, error } = await supabase
       .from("shelves")
-      .select("id,name,shelf_levels(id,name)")
+      .select("id,name,shelf_tiers(id,shelf_id,tier_name,position)")
       .order("name", { ascending: true })
     if (error) {
       console.warn("Failed to fetch shelves", error)
       return []
     }
-    return (data ?? []).map((shelf) => ({
-      id: shelf.id,
-      name: shelf.name,
-      levels: (shelf.shelf_levels ?? []).map((level) => ({
-        id: level.id,
-        shelf_id: shelf.id,
-        name: level.name,
-      })),
-    }))
+
+    return (data as SupabaseShelfRow[] | null ?? []).map((shelf) => {
+      const tiers = (shelf.shelf_tiers ?? [])
+        .slice()
+        .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+        .map((tier) => ({
+          id: tier.id,
+          shelf_id: tier.shelf_id,
+          tier_name: tier.tier_name,
+          position: tier.position,
+        }))
+
+      return {
+        id: shelf.id,
+        name: shelf.name,
+        tiers,
+        levels: tiers.map((tier) => ({ ...tier, name: tier.tier_name })),
+      }
+    })
   } catch (error) {
     console.warn("Failed to load shelves", error)
     return []
   }
 }
 
-export interface EnsureShelfLevelInput {
+export interface EnsureShelfTierInput {
   shelfName: string
-  levelName?: string | null
+  tierName?: string | null
 }
 
-export interface EnsureShelfLevelResult {
+export interface EnsureShelfTierResult {
   shelf_id: string
-  shelf_level_id?: string | null
+  shelf_tier_id?: string | null
 }
 
-export async function ensureShelfLevel(
-  input: EnsureShelfLevelInput,
-): Promise<EnsureShelfLevelResult> {
+export async function ensureShelfTier(
+  input: EnsureShelfTierInput,
+): Promise<EnsureShelfTierResult> {
   if (!isSupabaseConfigured()) {
     throw new Error("Supabase is not configured")
   }
-  const supabase = createServerSupabaseClient()
-  const { shelfName, levelName } = input
+  const supabase = createServerClient()
+  const { shelfName, tierName } = input
 
   const { data: existingShelf, error: shelfError } = await supabase
     .from("shelves")
@@ -86,33 +108,39 @@ export async function ensureShelfLevel(
     shelfId = createdShelf.id
   }
 
-  if (!levelName) {
-    return { shelf_id: shelfId, shelf_level_id: null }
+  if (!tierName) {
+    return { shelf_id: shelfId, shelf_tier_id: null }
   }
 
-  const { data: existingLevel, error: levelError } = await supabase
-    .from("shelf_levels")
+  const { data: existingTier, error: tierError } = await supabase
+    .from("shelf_tiers")
     .select("id")
     .eq("shelf_id", shelfId)
-    .eq("name", levelName)
+    .eq("tier_name", tierName)
     .maybeSingle()
-  if (levelError && levelError.code !== "PGRST116") {
-    throw new Error(levelError.message)
+  if (tierError && tierError.code !== "PGRST116") {
+    throw new Error(tierError.message)
   }
 
-  if (existingLevel?.id) {
-    return { shelf_id: shelfId, shelf_level_id: existingLevel.id }
+  if (existingTier?.id) {
+    return { shelf_id: shelfId, shelf_tier_id: existingTier.id }
   }
 
-  const { data: createdLevel, error: createLevelError } = await supabase
-    .from("shelf_levels")
-    .insert({ shelf_id: shelfId, name: levelName })
+  const { data: createdTier, error: createTierError } = await supabase
+    .from("shelf_tiers")
+    .insert({ shelf_id: shelfId, tier_name: tierName })
     .select("id")
     .single()
 
-  if (createLevelError) {
-    throw new Error(createLevelError.message)
+  if (createTierError) {
+    throw new Error(createTierError.message)
   }
 
-  return { shelf_id: shelfId, shelf_level_id: createdLevel.id }
+  return { shelf_id: shelfId, shelf_tier_id: createdTier.id }
 }
+
+// Temporary alias to maintain backwards compatibility with earlier helpers
+export const listShelvesWithLevels = listShelvesWithTiers
+export type ShelfWithLevels = ShelfWithTiers
+export type ShelfLevel = ShelfTier
+export const ensureShelfLevel = ensureShelfTier

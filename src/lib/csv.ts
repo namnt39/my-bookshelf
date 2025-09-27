@@ -7,6 +7,7 @@ export type BookCsvField =
   | "cover_url"
   | "shelf"
   | "level"
+  | "tier"
   | "note"
 
 export type CsvHeaderMapping = Record<string, BookCsvField | null>
@@ -36,6 +37,7 @@ export interface PreparedBookRow {
   cover_url?: string | null
   shelf?: string | null
   level?: string | null
+  tier?: string | null
   note?: string | null
 }
 
@@ -61,7 +63,9 @@ export function autoMapHeaders(headers: string[]): CsvHeaderMapping {
       mapping[header] = "cover_url"
     } else if (/shelf/.test(normalized)) {
       mapping[header] = "shelf"
-    } else if (/level|tier|row/.test(normalized)) {
+    } else if (/tier/.test(normalized)) {
+      mapping[header] = "tier"
+    } else if (/level|row/.test(normalized)) {
       mapping[header] = "level"
     } else if (/note|remark|comment/.test(normalized)) {
       mapping[header] = "note"
@@ -199,13 +203,15 @@ export function prepareRows(
       }
     })
 
+    const level = mapped.level ?? mapped.tier ?? null
     const prepared: PreparedBookRow = {
       title: mapped.title ?? "",
       author: mapped.author ?? null,
       isbn: mapped.isbn ?? null,
       cover_url: mapped.cover_url ?? null,
       shelf: mapped.shelf ?? null,
-      level: mapped.level ?? null,
+      level,
+      tier: mapped.tier ?? mapped.level ?? null,
       note: mapped.note ?? null,
     }
 

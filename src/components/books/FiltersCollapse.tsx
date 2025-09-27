@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -14,18 +14,18 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import type { BookStatus } from "@/lib/books"
-import type { ShelfWithLevels } from "@/lib/shelves"
+import type { ShelfWithTiers } from "@/lib/shelves"
 import { cn } from "@/lib/utils"
 
 export interface FiltersState {
   q?: string
-  shelf_id?: string
-  level_id?: string
+  shelfId?: string
+  tierId?: string
   status?: BookStatus
 }
 
 export interface FiltersCollapseProps {
-  shelves: ShelfWithLevels[]
+  shelves: ShelfWithTiers[]
   value: FiltersState
   onChange: (value: FiltersState) => void
   className?: string
@@ -33,17 +33,32 @@ export interface FiltersCollapseProps {
 
 export function FiltersCollapse({ shelves, value, onChange, className }: FiltersCollapseProps) {
   const [open, setOpen] = useState(true)
+  const [searchText, setSearchText] = useState(value.q ?? "")
 
-  const levelOptions = useMemo(() => {
-    const selectedShelf = shelves.find((shelf) => shelf.id === value.shelf_id)
-    return selectedShelf?.levels ?? []
-  }, [shelves, value.shelf_id])
+  useEffect(() => {
+    setSearchText(value.q ?? "")
+  }, [value.q])
+
+  useEffect(() => {
+    const handler = window.setTimeout(() => {
+      if ((value.q ?? "") !== searchText) {
+        onChange({ ...value, q: searchText || undefined })
+      }
+    }, 300)
+    return () => window.clearTimeout(handler)
+  }, [searchText, value, onChange])
+
+  const tierOptions = useMemo(() => {
+    const selectedShelf = shelves.find((shelf) => shelf.id === value.shelfId)
+    return selectedShelf?.tiers ?? []
+  }, [shelves, value.shelfId])
 
   function update(partial: Partial<FiltersState>) {
     onChange({ ...value, ...partial })
   }
 
   function reset() {
+    setSearchText("")
     onChange({})
   }
 
@@ -62,14 +77,14 @@ export function FiltersCollapse({ shelves, value, onChange, className }: Filters
         <div className="flex flex-col gap-4 px-5 pb-5">
           <Input
             placeholder="Search title, author, or ISBN"
-            value={value.q ?? ""}
-            onChange={(event) => update({ q: event.target.value })}
+            value={searchText}
+            onChange={(event) => setSearchText(event.target.value)}
           />
           <div className="grid gap-4 md:grid-cols-3">
             <Select
-              value={value.shelf_id ?? "__all__"}
+              value={value.shelfId ?? "__all__"}
               onValueChange={(next) =>
-                update({ shelf_id: next === "__all__" ? undefined : next, level_id: undefined })
+                update({ shelfId: next === "__all__" ? undefined : next, tierId: undefined })
               }
             >
               <SelectTrigger>
@@ -88,11 +103,11 @@ export function FiltersCollapse({ shelves, value, onChange, className }: Filters
               </SelectContent>
             </Select>
             <Select
-              value={value.level_id ?? "__all__"}
+              value={value.tierId ?? "__all__"}
               onValueChange={(next) =>
-                update({ level_id: next === "__all__" ? undefined : next })
+                update({ tierId: next === "__all__" ? undefined : next })
               }
-              disabled={!levelOptions.length}
+              disabled={!tierOptions.length}
             >
               <SelectTrigger>
                 <SelectValue placeholder="All levels" />
@@ -101,9 +116,9 @@ export function FiltersCollapse({ shelves, value, onChange, className }: Filters
                 <SelectGroup>
                   <SelectLabel>Levels</SelectLabel>
                   <SelectItem value="__all__">All levels</SelectItem>
-                  {levelOptions.map((level) => (
-                    <SelectItem key={level.id} value={level.id}>
-                      {level.name}
+                  {tierOptions.map((tier) => (
+                    <SelectItem key={tier.id} value={tier.id}>
+                      {tier.tier_name}
                     </SelectItem>
                   ))}
                 </SelectGroup>
@@ -123,7 +138,7 @@ export function FiltersCollapse({ shelves, value, onChange, className }: Filters
                   <SelectLabel>Status</SelectLabel>
                   <SelectItem value="__all__">All statuses</SelectItem>
                   <SelectItem value="available">Available</SelectItem>
-                  <SelectItem value="loaned">Loaned</SelectItem>
+                  <SelectItem value="borrowed">Borrowed</SelectItem>
                   <SelectItem value="archived">Archived</SelectItem>
                 </SelectGroup>
               </SelectContent>
@@ -141,18 +156,18 @@ export function FiltersCollapse({ shelves, value, onChange, className }: Filters
   )
 }
 
-function summarizeFilters(filters: FiltersState, shelves: ShelfWithLevels[]) {
+function summarizeFilters(filters: FiltersState, shelves: ShelfWithTiers[]) {
   const active: string[] = []
   if (filters.q) active.push(`Search: "${filters.q}"`)
-  if (filters.shelf_id) {
-    const shelf = shelves.find((item) => item.id === filters.shelf_id)
+  if (filters.shelfId) {
+    const shelf = shelves.find((item) => item.id === filters.shelfId)
     if (shelf) active.push(`Shelf: ${shelf.name}`)
   }
-  if (filters.level_id) {
-    const level = shelves
-      .flatMap((shelf) => shelf.levels.map((level) => ({ ...level, shelf_name: shelf.name })))
-      .find((level) => level.id === filters.level_id)
-    if (level) active.push(`Level: ${level.name}`)
+  if (filters.tierId) {
+    const tier = shelves
+      .flatMap((shelf) => shelf.tiers.map((tier) => ({ ...tier, shelf_name: shelf.name })))
+      .find((tier) => tier.id === filters.tierId)
+    if (tier) active.push(`Level: ${tier.tier_name}`)
   }
   if (filters.status) active.push(`Status: ${filters.status}`)
   return active.length ? active.join(" · ") : "No filters applied"

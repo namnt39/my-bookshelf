@@ -1,30 +1,43 @@
 import { chunk } from "./collections"
 import { PreparedBookRow } from "./csv"
-import { createServerSupabaseClient, isSupabaseConfigured } from "./supabaseClient"
+import { getCoversBucket, isSupabaseConfigured } from "./supabase/env"
+import { createServerClient } from "./supabase/server"
 
-export type BookStatus = "available" | "loaned" | "archived"
+import type { Database } from "@/types/db"
+
+export type BookStatus = "available" | "borrowed" | "archived"
 
 export interface BookRecord {
   id: string
   title: string
   author?: string | null
   isbn?: string | null
+  summary?: string | null
+  note?: string | null
+  cover_storage_path?: string | null
+  cover_external_url?: string | null
   cover_url?: string | null
-  status?: BookStatus | null
-  created_at?: string
   shelf?: { id: string; name: string } | null
+  tier?: { id: string; tier_name: string; position: number } | null
+  /**
+   * @deprecated Use `tier` instead. Provided for backwards compatibility with older UI components.
+   */
   level?: { id: string; name: string } | null
-  borrower?: { id: string; full_name?: string | null } | null
-  loan?: { id: string; due_at?: string | null } | null
+  borrower?: { id: string; display_name: string; phone?: string | null } | null
+  active_loan?: { id: string; borrowed_at: string; returned_at?: string | null; note?: string | null } | null
+  is_archived: boolean
+  status: BookStatus
+  created_at: string
+  updated_at: string
 }
 
 export interface ListBooksParams {
   q?: string
-  shelf_id?: string
-  level_id?: string
+  shelfId?: string
+  tierId?: string
   status?: BookStatus
-  limit?: number
-  offset?: number
+  page?: number
+  pageSize?: number
 }
 
 export interface ListBooksResult {
@@ -32,40 +45,68 @@ export interface ListBooksResult {
   total: number
 }
 
+type BookRow = Database["public"]["Tables"]["books"]["Row"]
+type ShelfRow = Database["public"]["Tables"]["shelves"]["Row"]
+type TierRow = Database["public"]["Tables"]["shelf_tiers"]["Row"]
+type LoanRow = Database["public"]["Tables"]["loans"]["Row"]
+type BorrowerRow = Database["public"]["Tables"]["borrowers"]["Row"]
+
+interface SupabaseBookRow extends BookRow {
+  shelves: ShelfRow | null
+  shelf_tiers: TierRow | null
+  loans: (LoanRow & { borrowers: BorrowerRow | null })[] | null
+}
+
 export async function listBooks(params: ListBooksParams = {}): Promise<ListBooksResult> {
-  const { q, shelf_id, level_id, status, limit = 24, offset = 0 } = params
   if (!isSupabaseConfigured()) {
     return { books: [], total: 0 }
   }
-  const supabase = createServerSupabaseClient()
+
+  const page = Math.max(1, params.page ?? 1)
+  const pageSize = Math.min(100, Math.max(1, params.pageSize ?? 20))
+  const offset = (page - 1) * pageSize
+  const rangeEnd = offset + pageSize - 1
+  const supabase = createServerClient()
 
   try {
     let query = supabase
       .from("books")
       .select(
-        "id,title,author,isbn,cover_url,status,created_at,shelves!books_shelf_id_fkey(id,name),shelf_levels!books_shelf_level_id_fkey(id,name),borrowers!books_borrower_id_fkey(id,full_name),loans(id,due_at)",
+        `id,isbn,title,author,summary,note,cover_storage_path,cover_external_url,shelf_id,shelf_tier_id,is_archived,created_at,updated_at,
+          shelves:shelf_id (id,name),
+          shelf_tiers:shelf_tier_id (id,tier_name,position),
+          loans:loans (id,borrower_id,borrowed_at,returned_at,note,borrowers:borrowers (id,display_name,phone))
+        `,
         { count: "exact" },
       )
       .order("created_at", { ascending: false })
-      .limit(limit)
-      .range(offset, offset + limit - 1)
+      .range(offset, rangeEnd)
 
-    if (q) {
-      const escaped = q.replace(/[,]/g, "")
-      query = query.or(
-        `title.ilike.%${escaped}%,author.ilike.%${escaped}%,isbn.ilike.%${escaped}%`,
-        { referencedTable: "books" },
-      )
+    if (params.q) {
+      const escaped = params.q.replace(/[,]/g, "").trim()
+      if (escaped) {
+        query = query.or(
+          `title.ilike.%${escaped}%,author.ilike.%${escaped}%,isbn.ilike.%${escaped}%`,
+        )
+      }
     }
 
-    if (shelf_id) {
-      query = query.eq("shelf_id", shelf_id)
+    if (params.shelfId) {
+      query = query.eq("shelf_id", params.shelfId)
     }
-    if (level_id) {
-      query = query.eq("shelf_level_id", level_id)
+
+    if (params.tierId) {
+      query = query.eq("shelf_tier_id", params.tierId)
     }
-    if (status) {
-      query = query.eq("status", status)
+
+    if (params.status === "archived") {
+      query = query.eq("is_archived", true)
+    } else if (params.status === "borrowed") {
+      query = query.eq("is_archived", false).eq("loans.returned_at", null)
+    } else if (params.status === "available") {
+      query = query
+        .eq("is_archived", false)
+        .or("loans.returned_at.not.is.null,loans.id.is.null")
     }
 
     const { data, error, count } = await query
@@ -74,27 +115,86 @@ export async function listBooks(params: ListBooksParams = {}): Promise<ListBooks
       return { books: [], total: 0 }
     }
 
-    const rawRows = (data ?? []) as Record<string, unknown>[]
-    const books: BookRecord[] = rawRows.map((row) => {
-      const typed = row as unknown as SupabaseBookRow
-      const shelf = typed.shelves as SupabaseBookRow["shelves"]
-      const level = typed.shelf_levels as SupabaseBookRow["shelf_levels"]
-      const borrower = typed.borrowers as SupabaseBookRow["borrowers"]
-      const loan = typed.loans as SupabaseBookRow["loans"]
+    const rows = (data ?? []) as SupabaseBookRow[]
+    const coverPaths = Array.from(
+      new Set(
+        rows
+          .map((row) => row.cover_storage_path)
+          .filter((value): value is string => typeof value === "string" && value.length > 0),
+      ),
+    )
+
+    const signedUrlMap = new Map<string, string>()
+    if (coverPaths.length) {
+      const { data: signedUrls, error: signedError } = await supabase.storage
+        .from(getCoversBucket())
+        .createSignedUrls(coverPaths, 60 * 60)
+      if (!signedError && signedUrls) {
+        signedUrls.forEach((item) => {
+          if (item.signedUrl) {
+            signedUrlMap.set(item.path, item.signedUrl)
+          }
+        })
+      }
+    }
+
+    const books: BookRecord[] = rows.map((row) => {
+      const loans = row.loans ?? []
+      const activeLoan = loans.find((loan) => loan.returned_at === null)
+      const borrower = activeLoan?.borrowers ?? null
+      const status: BookStatus = row.is_archived
+        ? "archived"
+        : activeLoan
+          ? "borrowed"
+          : "available"
+
+      const coverUrl = row.cover_external_url
+        ?? (row.cover_storage_path ? signedUrlMap.get(row.cover_storage_path) ?? null : null)
 
       return {
-        id: typed.id,
-        title: typed.title,
-        author: typed.author ?? null,
-        isbn: typed.isbn ?? null,
-        cover_url: typed.cover_url ?? null,
-        status: typed.status ?? null,
-        created_at: typed.created_at,
-        shelf: shelf ? { id: shelf.id, name: shelf.name } : null,
-        level: level ? { id: level.id, name: level.name } : null,
-        borrower: borrower ? { id: borrower.id, full_name: borrower.full_name } : null,
-        loan: loan ? { id: loan.id, due_at: loan.due_at } : null,
-      } satisfies BookRecord
+        id: row.id,
+        title: row.title ?? "Untitled",
+        author: row.author ?? null,
+        isbn: row.isbn ?? null,
+        summary: row.summary ?? null,
+        note: row.note ?? null,
+        cover_storage_path: row.cover_storage_path ?? null,
+        cover_external_url: row.cover_external_url ?? null,
+        cover_url: coverUrl,
+        shelf: row.shelves ? { id: row.shelves.id, name: row.shelves.name } : null,
+        tier: row.shelf_tiers
+          ? {
+              id: row.shelf_tiers.id,
+              tier_name: row.shelf_tiers.tier_name,
+              position: row.shelf_tiers.position,
+            }
+          : null,
+        level: row.shelf_tiers
+          ? {
+              id: row.shelf_tiers.id,
+              name: row.shelf_tiers.tier_name,
+            }
+          : null,
+        borrower: borrower
+          ? {
+              id: borrower.id,
+              display_name: borrower.display_name,
+              phone: borrower.phone ?? null,
+            }
+          : null,
+        active_loan: activeLoan
+          ? {
+              id: activeLoan.id,
+              borrowed_at: activeLoan.borrowed_at,
+              returned_at: activeLoan.returned_at ?? null,
+              note: activeLoan.note ?? null,
+            }
+          : null,
+        is_archived: row.is_archived,
+        status,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      }
     })
 
     return {
@@ -122,43 +222,29 @@ export interface BulkInsertResult {
   errorRows: BulkInsertErrorRow[]
 }
 
-interface SupabaseBookRow {
-  id: string
-  title: string
-  author?: string | null
-  isbn?: string | null
-  cover_url?: string | null
-  status?: BookStatus | null
-  created_at?: string
-  shelves?: { id: string; name: string } | null
-  shelf_levels?: { id: string; name: string } | null
-  borrowers?: { id: string; full_name?: string | null } | null
-  loans?: { id: string; due_at?: string | null } | null
-}
-
 interface BookInsertPayload {
   title: string
   author?: string | null
   isbn?: string | null
-  cover_url?: string | null
+  cover_external_url?: string | null
   shelf_id?: string | null
-  shelf_level_id?: string | null
+  shelf_tier_id?: string | null
   note?: string | null
 }
 
 interface ShelfCacheValue {
   shelf_id: string
-  shelf_level_id?: string | null
+  shelf_tier_id?: string | null
 }
 
-async function ensureShelfAndLevel(
-  supabase: ReturnType<typeof createServerSupabaseClient>,
+async function ensureShelfAndTier(
+  supabase: ReturnType<typeof createServerClient>,
   shelfName?: string | null,
-  levelName?: string | null,
+  tierName?: string | null,
   cache = new Map<string, ShelfCacheValue>(),
 ): Promise<ShelfCacheValue | null> {
   if (!shelfName) return null
-  const key = `${shelfName.toLowerCase()}::${levelName?.toLowerCase() ?? ""}`
+  const key = `${shelfName.toLowerCase()}::${tierName?.toLowerCase() ?? ""}`
   if (cache.has(key)) {
     return cache.get(key) ?? null
   }
@@ -184,36 +270,36 @@ async function ensureShelfAndLevel(
     shelfId = insertedShelf.id
   }
 
-  if (!levelName) {
-    const result = { shelf_id: shelfId, shelf_level_id: null }
+  if (!tierName) {
+    const result = { shelf_id: shelfId, shelf_tier_id: null }
     cache.set(key, result)
     return result
   }
 
-  const { data: existingLevel, error: levelError } = await supabase
-    .from("shelf_levels")
+  const { data: existingTier, error: tierError } = await supabase
+    .from("shelf_tiers")
     .select("id")
     .eq("shelf_id", shelfId)
-    .eq("name", levelName)
+    .eq("tier_name", tierName)
     .maybeSingle()
-  if (levelError && levelError.code !== "PGRST116") {
-    throw new Error(levelError.message)
+  if (tierError && tierError.code !== "PGRST116") {
+    throw new Error(tierError.message)
   }
 
-  let levelId = existingLevel?.id
-  if (!levelId) {
-    const { data: insertedLevel, error: insertLevelError } = await supabase
-      .from("shelf_levels")
-      .insert({ shelf_id: shelfId, name: levelName })
+  let tierId = existingTier?.id
+  if (!tierId) {
+    const { data: insertedTier, error: insertTierError } = await supabase
+      .from("shelf_tiers")
+      .insert({ shelf_id: shelfId, tier_name: tierName })
       .select("id")
       .single()
-    if (insertLevelError) {
-      throw new Error(insertLevelError.message)
+    if (insertTierError) {
+      throw new Error(insertTierError.message)
     }
-    levelId = insertedLevel.id
+    tierId = insertedTier.id
   }
 
-  const result = { shelf_id: shelfId, shelf_level_id: levelId }
+  const result = { shelf_id: shelfId, shelf_tier_id: tierId }
   cache.set(key, result)
   return result
 }
@@ -225,42 +311,46 @@ export async function bulkInsertBooks(
   if (!isSupabaseConfigured()) {
     throw new Error("Supabase is not configured")
   }
-  const supabase = createServerSupabaseClient()
+  const supabase = createServerClient()
   const batchSize = options.batchSize ?? 200
   const onDuplicate = options.onDuplicate ?? "skip"
   const errorRows: BulkInsertErrorRow[] = []
   let okCount = 0
 
   const cache = new Map<string, ShelfCacheValue>()
+  const enumerated = rows.map((row, index) => ({ row, index }))
 
-  for (const group of chunk(rows, batchSize)) {
-    const payload: BookInsertPayload[] = []
-    for (const row of group) {
+  for (const group of chunk(enumerated, batchSize)) {
+    const payload: { data: BookInsertPayload; index: number }[] = []
+    for (const { row, index } of group) {
       if (!row.title) {
-        errorRows.push({ index: okCount + payload.length, message: "Missing title" })
+        errorRows.push({ index, message: "Missing title" })
         continue
       }
       let shelfIds: ShelfCacheValue | null = null
       try {
         if (row.shelf) {
-          shelfIds = await ensureShelfAndLevel(supabase, row.shelf, row.level, cache)
+          shelfIds = await ensureShelfAndTier(supabase, row.shelf, row.tier ?? row.level, cache)
         }
       } catch (error) {
         errorRows.push({
-          index: okCount + payload.length,
-          message: error instanceof Error ? error.message : "Failed to ensure shelf/level",
+          index,
+          message: error instanceof Error ? error.message : "Failed to ensure shelf/tier",
         })
         continue
       }
 
       payload.push({
-        title: row.title,
-        author: row.author,
-        isbn: row.isbn,
-        cover_url: row.cover_url,
-        shelf_id: shelfIds?.shelf_id ?? null,
-        shelf_level_id: shelfIds?.shelf_level_id ?? null,
-        note: row.note,
+        index,
+        data: {
+          title: row.title,
+          author: row.author ?? null,
+          isbn: row.isbn ?? null,
+          cover_external_url: row.cover_url ?? null,
+          shelf_id: shelfIds?.shelf_id ?? null,
+          shelf_tier_id: shelfIds?.shelf_tier_id ?? null,
+          note: row.note ?? null,
+        },
       })
     }
 
@@ -268,16 +358,19 @@ export async function bulkInsertBooks(
       continue
     }
 
-    const mutation = supabase.from("books").upsert(payload, {
-      onConflict: "isbn",
-      ignoreDuplicates: onDuplicate === "skip",
-    })
+    const mutation = supabase.from("books").upsert(
+      payload.map((item) => item.data),
+      {
+        onConflict: "isbn",
+        ignoreDuplicates: onDuplicate === "skip",
+      },
+    )
 
     const { error } = await mutation
     if (error) {
-      payload.forEach((_, index) => {
+      payload.forEach(({ index }) => {
         errorRows.push({
-          index: okCount + index,
+          index,
           message: error.message,
         })
       })
