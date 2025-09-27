@@ -102,7 +102,7 @@ export async function listBooks(params: ListBooksParams = {}): Promise<ListBooks
     if (params.status === "archived") {
       query = query.eq("is_archived", true)
     } else if (params.status === "borrowed") {
-      query = query.eq("is_archived", false).eq("loans.returned_at", null)
+      query = query.eq("is_archived", false).is("loans.returned_at", null)
     } else if (params.status === "available") {
       query = query
         .eq("is_archived", false)
